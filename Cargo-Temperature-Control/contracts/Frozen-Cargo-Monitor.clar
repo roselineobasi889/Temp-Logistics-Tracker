@@ -13,11 +13,17 @@
 (define-constant ERR-INVALID-THRESHOLD (err u107))
 (define-constant ERR-SENSOR-NOT-AUTHORIZED (err u108))
 (define-constant ERR-INVALID-STATUS (err u109))
+(define-constant ERR-INVALID-INPUT (err u110))
+(define-constant ERR-INVALID-SENSOR-ID (err u111))
+(define-constant ERR-INVALID-PRINCIPAL (err u112))
+(define-constant ERR-INVALID-STRING (err u113))
 
 ;; Validation constants for temperature ranges (in Celsius * 100 to handle decimals)
 (define-constant MIN-TEMPERATURE -8000) ;; -80.00C
 (define-constant MAX-TEMPERATURE 6000)  ;; 60.00C
 (define-constant MAX-TIMESTAMP u4294967295) ;; Maximum valid timestamp
+(define-constant MAX-HUMIDITY u100) ;; Maximum humidity percentage
+(define-constant MAX-SHIPMENT-ID u4294967295) ;; Maximum valid shipment ID
 
 ;; Contract owner for administrative functions
 (define-constant CONTRACT-OWNER tx-sender)
@@ -93,12 +99,52 @@
 
 (define-data-var next-event-id uint u1)
 
+;; Input validation helper functions
+(define-private (is-valid-sensor-id (sensor-id (string-ascii 32)))
+  (and 
+    (> (len sensor-id) u0)
+    (<= (len sensor-id) u32)
+  )
+)
+
+(define-private (is-valid-product-type (product-type (string-ascii 50)))
+  (and 
+    (> (len product-type) u0)
+    (<= (len product-type) u50)
+  )
+)
+
+(define-private (is-valid-location (location (string-ascii 100)))
+  (and 
+    (> (len location) u0)
+    (<= (len location) u100)
+  )
+)
+
+(define-private (is-valid-principal (addr principal))
+  (not (is-eq addr 'ST000000000000000000002AMW42H))
+)
+
+(define-private (is-valid-shipment-id (shipment-id uint))
+  (and 
+    (> shipment-id u0)
+    (<= shipment-id MAX-SHIPMENT-ID)
+  )
+)
+
+(define-private (is-valid-humidity (humidity uint))
+  (<= humidity MAX-HUMIDITY)
+)
+
 ;; Administrative function to authorize new temperature sensors
 ;; Only contract owner can add sensors to maintain security
 (define-public (authorize-sensor (sensor-id (string-ascii 32)) (owner principal))
   (begin
     ;; Verify only contract owner can authorize sensors
     (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-UNAUTHORIZED-ACCESS)
+    ;; Validate inputs
+    (asserts! (is-valid-sensor-id sensor-id) ERR-INVALID-SENSOR-ID)
+    (asserts! (is-valid-principal owner) ERR-INVALID-PRINCIPAL)
     ;; Add sensor to authorized list with current timestamp
     (map-set authorized-sensors
       { sensor-id: sensor-id }
@@ -121,6 +167,10 @@
   (min-temp int)
   (max-temp int))
   (let ((shipment-id (var-get next-shipment-id)))
+    ;; Validate all inputs
+    (asserts! (is-valid-principal receiver) ERR-INVALID-PRINCIPAL)
+    (asserts! (is-valid-principal carrier) ERR-INVALID-PRINCIPAL)
+    (asserts! (is-valid-product-type product-type) ERR-INVALID-STRING)
     ;; Validate temperature thresholds are within acceptable ranges
     (asserts! (and (>= min-temp MIN-TEMPERATURE) (<= max-temp MAX-TEMPERATURE)) ERR-INVALID-THRESHOLD)
     (asserts! (< min-temp max-temp) ERR-INVALID-THRESHOLD)
@@ -175,6 +225,11 @@
     (reading-id (get count reading-counter))
     (is-violation (or (< temperature (get min-temp shipment)) (> temperature (get max-temp shipment))))
   )
+    ;; Validate all inputs
+    (asserts! (is-valid-shipment-id shipment-id) ERR-INVALID-INPUT)
+    (asserts! (is-valid-humidity humidity) ERR-INVALID-INPUT)
+    (asserts! (is-valid-sensor-id sensor-id) ERR-INVALID-SENSOR-ID)
+    (asserts! (is-valid-location location) ERR-INVALID-STRING)
     ;; Validate sensor is authorized and temperature is in valid range
     (asserts! (get certified sensor) ERR-SENSOR-NOT-AUTHORIZED)
     (asserts! (and (>= temperature MIN-TEMPERATURE) (<= temperature MAX-TEMPERATURE)) ERR-INVALID-TEMPERATURE)
@@ -229,6 +284,8 @@
 ;; Allows authorized parties to update delivery status
 (define-public (update-shipment-status (shipment-id uint) (new-status uint))
   (let ((shipment (unwrap! (map-get? shipments { shipment-id: shipment-id }) ERR-SHIPMENT-NOT-FOUND)))
+    ;; Validate inputs
+    (asserts! (is-valid-shipment-id shipment-id) ERR-INVALID-INPUT)
     ;; Verify caller is authorized to update status
     (asserts! (or 
       (is-eq tx-sender (get sender shipment))
@@ -369,6 +426,8 @@
   (begin
     ;; Only contract owner can revoke sensor authorization
     (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-UNAUTHORIZED-ACCESS)
+    ;; Validate input
+    (asserts! (is-valid-sensor-id sensor-id) ERR-INVALID-SENSOR-ID)
     
     ;; Update sensor certification status
     (match (map-get? authorized-sensors { sensor-id: sensor-id })
